@@ -18,6 +18,35 @@ import (
 	"strings"
 )
 
+type ircpacket struct {
+	prefix	string
+	command	string
+	params	string
+	trail	string
+}
+func NewIrcPacket(s string) ircpacket {
+	var pkt ircpacket
+	ti := strings.Index(s," :") + 2
+	if ti < 2 {
+		ti = len(s)
+		pkt.trail = ""
+	} else {
+		pkt.trail = s[ti:]
+	}
+
+	split := strings.Fields(s[:ti])
+
+	off := 0
+	if s[0] == ':' {
+		off = 1
+		pkt.prefix = split[0]
+	} else {
+		pkt.prefix = ""
+	}
+	pkt.command = split[off]
+	pkt.params = strings.Join(split[off+1:]," ")
+	return pkt
+}
 
 func main() {
 	var port string
@@ -50,20 +79,27 @@ func main() {
 				fmt.Println(err)
 				return
 			}
-
-			if packet[0:4] == "PING" {
+			pkt := NewIrcPacket(packet[:len(packet)-1])
+			if pkt.command == "PING" {
 				conn.Write([]byte("PONG"+packet[4:]))
 			}
 
 			nv := false
-			nv = nv || strings.Contains(string(packet),"PING")
-			nv = nv || strings.Contains(string(packet),"JOIN")
-			nv = nv || strings.Contains(string(packet),"PART")
-			nv = nv || strings.Contains(string(packet),"QUIT")
+			nv = nv || pkt.command == "PING"
+			nv = nv || pkt.command == "JOIN"
+			nv = nv || pkt.command == "PART"
+			nv = nv || pkt.command == "QUIT"
 			if nv { continue }
 
-			out := strings.Split(string(packet[:len(packet)-1]),":")
-			fmt.Println(out[len(out)-1])
+			out := "" //strings.Split(string(packet[:len(packet)-1]),":")
+			nickind := strings.Index(pkt.prefix,"!~")
+			if nickind != -1 {
+				nick := pkt.prefix[1:nickind]
+				out = strings.Join([]string{out,nick},"")
+			}
+			out = strings.Join([]string{out,pkt.trail},":\t")
+
+			fmt.Println(out)
 		}
 	} (blocking)
 
