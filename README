@@ -1,0 +1,13 @@
+/h				Shows you this list
+/l				Lists channels you're connected to
+/log			Logs channel conversations
+/sync			Resyncs terminal buffer
+/show chname	Focuses window on chname if you're connected
+/msg name :msg	Sends msg to name
+Page Up			Page Up
+Page Down		Page Down
+Insert			Scroll Up
+Delete			Scroll Down
+
+Slowly more complexity has been added for further functionality, ie. scrolling of channel frames.  Should be extrapolated into a more complex struct, but I wanted to maintain the simplicity of map[string]Channel  so that it wouldn't be in the least bit daunting to think of this.
+The frivilous complexity has arisen due to map locks and shoehorning channel scrolling without changing the code's structure.
