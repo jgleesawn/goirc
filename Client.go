@@ -407,20 +407,41 @@ func (ic *IrcClient) ProcessInput() {
 		ic.current = "help"
 		return
 	case "log":
-		<-ic.map_lock
-		for k,v := range ic.Channels {
-			if k[0] != '#' { continue }
-			file,err := os.Create(k+"_log_"+time.Now().String())
-			if err != nil {
+		if len(params) > 0 {
+			for _,c := range params {
+				<-ic.map_lock
+				v,ok := ic.Channels[c]
+				ic.map_lock <- true
+				if ok {
+					if c[0] == '#' {
+						file,err := os.Create(c+"_log_"+time.Now().String())
+						if err != nil {
+							file.Close()
+							continue
+						}
+						for _,l := range v {
+							file.Write([]byte(l+"\n"))
+						}
+						file.Close()
+					}
+				}
+			}
+		} else {
+			<-ic.map_lock
+			for k,v := range ic.Channels {
+				if k[0] != '#' { continue }
+				file,err := os.Create(k+"_log_"+time.Now().String())
+				if err != nil {
+					file.Close()
+					continue
+				}
+				for _,l := range v {
+					file.Write([]byte(l+"\n"))
+				}
 				file.Close()
-				continue
 			}
-			for _,l := range v {
-				file.Write([]byte(l+"\n"))
-			}
-			file.Close()
+			ic.map_lock <- true
 		}
-		ic.map_lock <- true
 		return
 	/*case "print":
 		for _,l := range ic.Channels[ic.current] {
