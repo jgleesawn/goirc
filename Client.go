@@ -1,6 +1,7 @@
 package main
 import (
 	"strings"
+	"strconv"
 	"bufio"
 	"fmt"
 	"io"
@@ -22,6 +23,7 @@ type IrcClient struct {
 	current		string
 	updateView	chan bool
 	map_lock	chan bool
+	frame_offset	int			//Should be in the Channel struct.
 	//Reader		bufio.Reader
 	//Writer		bufio.Writer
 }
@@ -99,7 +101,7 @@ func (ic *IrcClient) View(finish chan bool) {
 	}()*/
 
 	//prev := make(map[string]int)
-	_,height := termbox.Size()
+	width,height := termbox.Size()
 	termbox.SetCursor(0,height)
 	for <-ic.updateView {
 		//fb := termbox.CellBuffer()
@@ -109,37 +111,53 @@ func (ic *IrcClient) View(finish chan bool) {
 		if ok {
 			termbox.Clear(termbox.ColorWhite,termbox.ColorBlack)
 			linecount := height-2
-/*
-			for l := len(ch)-1; linecount-(int(len(ch[len(ch)-1]))/width) > 1 && l >= 0; l -= 1 {
+
+//Outputs Line Wrapped lines stored in a channel.
+			bh := 1
+			for l := len(ch)-1; linecount > bh && l >= 0; l -= 1 {
+				if l >= ic.frame_offset { continue }	//Skips to offset
 				var cnt int
+				for _,_ = range ch[l] { cnt += 1 }
+				length := cnt
+				bh = length/(width-8)
+				cnt = 0
 				for _,c := range ch[l] {
-					line := linecount - cnt/width
-					termbox.SetCell(cnt%width,line,c,termbox.ColorWhite,termbox.ColorBlack)
+					off := cnt/(width-8)
+					termbox.SetCell(cnt%(width-8),linecount-bh+off,c,termbox.ColorWhite,termbox.ColorBlack)
 					cnt += 1
 				}
-				linecount -= int(len(ch[l]))/width
-			}
-			*/
-			for l := len(ch)-1; linecount > 1 && l >= 0; l -= 1 {
-				var cnt int
-				for _,c := range ch[l] {
-					termbox.SetCell(cnt,linecount,c,termbox.ColorWhite,termbox.ColorBlack)
-					cnt += 1
-				}
-				linecount -= 1
+				linecount -= 1+bh
 			}
 		}
+
+//Channel Name
 		cnt := 0
 		for _,c := range ic.current {
 			termbox.SetCell(cnt,0,c,termbox.ColorRed,termbox.ColorBlack)
 			cnt += 1
 		}
+
+//Input
 		cnt = 0
 		for _,c := range ic.Input {
 			//termbox.SetCell(i,height-2,rune(height),termbox.ColorWhite,termbox.ColorBlack)
 			termbox.SetCell(cnt,height-1,c,termbox.ColorWhite,termbox.ColorBlack)
 			cnt += 1
 		}
+
+//Channel List
+		<-ic.map_lock
+		h := 0
+		for k,_ := range ic.Channels{
+			if k[0] != '#' { continue }
+			w := 0
+			for _,r := range k {
+				termbox.SetCell(w+width-8,h,r,termbox.ColorWhite,termbox.ColorBlack)
+				w += 1
+			}
+			h += 1
+		}
+		ic.map_lock <- true
 		termbox.Flush()
 	}
 	//termbox.Close()
@@ -188,6 +206,34 @@ func (ic *IrcClient) ProcessTermbox() {
 					ic.ProcessInput()
 				case termbox.KeySpace:
 					ic.Input = append(ic.Input,' ')
+
+				case termbox.KeyInsert:	//KeyArrowUp rune is picked up
+					ic.frame_offset -= 1
+					if ic.frame_offset < 0 { ic.frame_offset = 0 }
+				case termbox.KeyDelete: //KeyArrowDown rune is picked up
+					ic.frame_offset += 1
+					<-ic.map_lock
+					l := len(ic.Channels[ic.current])
+					ic.map_lock <- true
+					if ic.frame_offset > l { ic.frame_offset = l }
+				case termbox.KeyPgup:
+					_,height := termbox.Size()
+					ic.frame_offset -= height
+					if ic.frame_offset < 0 { ic.frame_offset = 0 }
+				case termbox.KeyPgdn:
+					_,height := termbox.Size()
+					ic.frame_offset += height
+					<-ic.map_lock
+					l := len(ic.Channels[ic.current])
+					ic.map_lock <- true
+					if ic.frame_offset > l { ic.frame_offset = l }
+
+				case termbox.KeyHome:
+					ic.frame_offset = 0
+				case termbox.KeyEnd:
+					<-ic.map_lock
+					ic.frame_offset = len(ic.Channels[ic.current])
+					ic.map_lock <- true
 				case termbox.KeyCtrlQ:
 					return
 				default:
@@ -317,7 +363,7 @@ func (ic *IrcClient) ProcessInput() {
 		list := []string{"List of Channels."}
 		<-ic.map_lock
 		for k,_ := range ic.Channels {
-			list = append(list,k)
+			list = append(list,k+"\t\t"+strconv.Itoa(len(k)))
 		}
 		ic.Channels["list"] = list
 		ic.map_lock <- true
@@ -333,6 +379,10 @@ func (ic *IrcClient) ProcessInput() {
 		help = append(help,"/log         :Logs channel conversations")
 		help = append(help,"/sync        :Resync's terimnal buffer")
 		help = append(help,"/show chname :Focuses window on chname if you're connected")
+		help = append(help,"Page Up      :Page Up")
+		help = append(help,"Page Down    :Page Down")
+		help = append(help,"Insert       :Scroll Up")
+		help = append(help,"Delete       :Scroll Down")
 		<-ic.map_lock
 		ic.Channels["help"] = help
 		ic.map_lock <- true
