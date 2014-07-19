@@ -353,9 +353,9 @@ func (ic *IrcClient) ProcessInput() {
 			}
 		}
 		<-ic.map_lock
-		_,v := ic.Channels[ic.current]
+		v,_ := ic.Channels[ic.current]
 		ic.frame_offset = len(v)
-		map_lock <- true
+		ic.map_lock <- true
 
 		//fmt.Println(ic.current)
 		//ic.updateView <- true
