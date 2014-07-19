@@ -70,11 +70,13 @@ func (ic *IrcClient) Receive() {
 			<-ic.map_lock
 			ic.Channels[pkt.params] = append(ic.Channels[pkt.params],msg)
 			ic.map_lock<-true
+			if pkt.params == ic.current { ic.frame_offset += 1 }
 			break
 		default:
 			<-ic.map_lock
 			ic.Channels["default"] = append(ic.Channels["default"],pkt.ToString())
 			ic.map_lock<-true
+			if ic.current == "default" { ic.frame_offset += 1}
 			//fmt.Println(pkt)
 			break
 		}
@@ -313,11 +315,13 @@ func (ic *IrcClient) ProcessInput() {
 		<-ic.map_lock
 		ic.Channels[params[0]] = append(ic.Channels[params[0]],line)
 		ic.map_lock<-true
+		if params[0] == ic.current { ic.frame_offset += 1 }
 	case "privmsg":
 		pkt.cmd = "privmsg"
 		<-ic.map_lock
 		ic.Channels[params[0]] = append(ic.Channels[params[0]],line)
 		ic.map_lock<-true
+		if params[0] == ic.current { ic.frame_offset += 1 }
 		break
 	case "quit":
 		return
@@ -325,6 +329,7 @@ func (ic *IrcClient) ProcessInput() {
 		<-ic.map_lock
 		ic.Channels[ic.current] = append(ic.Channels[ic.current],line)
 		ic.map_lock<-true
+		ic.frame_offset += 1
 		pkt.cmd = "privmsg"
 		pkt.params = ic.current
 		pkt.trail = line
@@ -347,16 +352,21 @@ func (ic *IrcClient) ProcessInput() {
 				break
 			}
 		}
+		<-ic.map_lock
+		_,v := ic.Channels[ic.current]
+		ic.frame_offset = len(v)
+		map_lock <- true
 
 		//fmt.Println(ic.current)
 		//ic.updateView <- true
 		return
 	case "show":
 		<-ic.map_lock
-		_,ok := ic.Channels[params[0]]
+		v,ok := ic.Channels[params[0]]
 		ic.map_lock <- true
 		if ok {
 			ic.current = params[0]
+			ic.frame_offset = len(v)
 		}
 		return
 	case "l":
