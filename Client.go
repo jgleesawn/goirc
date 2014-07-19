@@ -121,11 +121,11 @@ func (ic *IrcClient) View(finish chan bool) {
 				var cnt int
 				for _,_ = range ch[l] { cnt += 1 }
 				length := cnt
-				bh = length/(width-8)
+				bh = length/(width-12)
 				cnt = 0
 				for _,c := range ch[l] {
-					off := cnt/(width-8)
-					termbox.SetCell(cnt%(width-8),linecount-bh+off,c,termbox.ColorWhite,termbox.ColorBlack)
+					off := cnt/(width-12)
+					termbox.SetCell(cnt%(width-12),linecount-bh+off,c,termbox.ColorWhite,termbox.ColorBlack)
 					cnt += 1
 				}
 				linecount -= 1+bh
@@ -150,11 +150,18 @@ func (ic *IrcClient) View(finish chan bool) {
 //Channel List
 		<-ic.map_lock
 		h := 0
-		for k,_ := range ic.Channels{
+		for k,v := range ic.Channels{
 			if k[0] != '#' { continue }
 			w := 0
 			for _,r := range k {
-				termbox.SetCell(w+width-8,h,r,termbox.ColorWhite,termbox.ColorBlack)
+				if w >= 8 { continue }
+				termbox.SetCell(w+width-12,h,r,termbox.ColorWhite,termbox.ColorBlack)
+				w += 1
+			}
+			num := strconv.Itoa(len(v))
+			w = 0
+			for _,r := range num {
+				termbox.SetCell(width-len(num)+w,h,r,termbox.ColorWhite,termbox.ColorBlack)
 				w += 1
 			}
 			h += 1
@@ -384,15 +391,16 @@ func (ic *IrcClient) ProcessInput() {
 		return
 	case "h":
 		help := []string{"List of client commands."}
-		help = append(help,"/h           :Shows you this list")
-		help = append(help,"/l           :Lists channels you're connected to")
-		help = append(help,"/log         :Logs channel conversations")
-		help = append(help,"/sync        :Resync's terimnal buffer")
-		help = append(help,"/show chname :Focuses window on chname if you're connected")
-		help = append(help,"Page Up      :Page Up")
-		help = append(help,"Page Down    :Page Down")
-		help = append(help,"Insert       :Scroll Up")
-		help = append(help,"Delete       :Scroll Down")
+		help = append(help,"/h             :Shows you this list")
+		help = append(help,"/l             :Lists channels you're connected to")
+		help = append(help,"/log           :Logs channel conversations")
+		help = append(help,"/sync          :Resync's terimnal buffer")
+		help = append(help,"/show chname   :Focuses window on chname if you're connected")
+		help = append(help,"/msg name :msg :Sends msg to name")
+		help = append(help,"Page Up        :Page Up")
+		help = append(help,"Page Down      :Page Down")
+		help = append(help,"Insert         :Scroll Up")
+		help = append(help,"Delete         :Scroll Down")
 		<-ic.map_lock
 		ic.Channels["help"] = help
 		ic.map_lock <- true
