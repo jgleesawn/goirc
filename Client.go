@@ -52,6 +52,10 @@ func (ic *IrcClient) RemUser(chname string,username string) {
 	<-ic.map_lock
 	
 	ch,_ := ic.Channels[chname]
+	if len(ch.Users) == 0 {
+		ic.map_lock <- true
+		return
+	}
 	ind := sort.StringSlice(ch.Users).Search(username)
 	if ch.Users[ind] == username {
 		if ind < len(ch.Users)-1 {
@@ -462,7 +466,7 @@ func (ic *IrcClient) ProcessInput() {
 			ic.frame_offset = len(v.Msgs)
 		}
 		return
-	case "l":
+	case "l":	//Print channel list
 		list := []string{"List of Channels."}
 		<-ic.map_lock
 		for k,_ := range ic.Channels {
@@ -475,6 +479,25 @@ func (ic *IrcClient) ProcessInput() {
 		ic.map_lock <- true
 		ic.current = "list"
 		return
+	case "u":	//Print users to default
+		width,height := termbox.Size()
+		<-ic.map_lock
+			ch,_ := ic.Channels[ic.current]
+		ic.map_lock <- true
+		out := strings.Join(ch.Users," ")
+
+		block_len := height*width/2
+		blocks := (len(out)/block_len)+1
+
+		for i := 0; i<blocks; i++ {
+			if (i+1)*block_len > len(out) {
+				ic.AddMsg("default",out[i*block_len:])
+			} else {
+				ic.AddMsg("default",out[i*block_len:(i+1)*block_len])
+			}
+		}
+		return
+
 	case "sync":
 		termbox.Sync()
 		return
