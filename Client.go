@@ -28,6 +28,7 @@ type IrcClient struct {
 	updateView	chan bool
 	map_lock	chan bool
 	frame_offset	int			//Should be in the Channel struct.
+	keywords	[]string
 	//Reader		bufio.Reader
 	//Writer		bufio.Writer
 }
@@ -197,9 +198,17 @@ func (ic *IrcClient) View(finish chan bool) {
 				length := cnt
 				bh = length/(width-12)
 				cnt = 0
+
+				fg := termbox.ColorWhite
+				for _,w := range ic.keywords {
+					if strings.Contains(ch.Msgs[l],w) {
+						fg = termbox.ColorGreen
+					}
+				}
+
 				for _,c := range ch.Msgs[l] {
 					off := cnt/(width-12)
-					termbox.SetCell(cnt%(width-12),linecount-bh+off,c,termbox.ColorWhite,termbox.ColorBlack)
+					termbox.SetCell(cnt%(width-12),linecount-bh+off,c,fg,termbox.ColorBlack)
 					cnt += 1
 				}
 				linecount -= 1+bh
@@ -557,6 +566,12 @@ func (ic *IrcClient) ProcessInput() {
 			}
 			ic.map_lock <- true
 		}
+		return
+	case "find":
+		ic.keywords = append(ic.keywords,pkt.params)
+		return
+	case "clear":
+		ic.keywords = []string{}
 		return
 	/*case "print":
 		for _,l := range ic.Channels[ic.current] {
