@@ -44,7 +44,7 @@ func NewIrcPacket(s string) ircpacket {
 	off := 0
 	if s[0] == ':' {
 		off = 1
-		pkt.prefix = strings.ToLower(split[0])
+		pkt.prefix = strings.ToLower(split[0][1:])
 	} else {
 		pkt.prefix = ""
 	}

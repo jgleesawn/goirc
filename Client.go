@@ -13,7 +13,11 @@ import (
 	"github.com/nsf/termbox-go"
 )
 
-type Channel []string
+type Channel struct { //[]string
+	Msgs			[]string
+	Users			[]string
+	Frame_offset	int
+}
 
 //Use SortedSlice instead of map for Channels, sort by channel name
 type IrcClient struct {
@@ -27,15 +31,71 @@ type IrcClient struct {
 	//Reader		bufio.Reader
 	//Writer		bufio.Writer
 }
+func (ic *IrcClient) AddUser(chname string,username string) {
+	<-ic.map_lock
+
+	ch,_ := ic.Channels[chname]
+	ch.Users = append(ch.Users,username)
+	sort.Sort(sort.StringSlice(ch.Users))
+	ind := sort.StringSlice(ch.Users).Search(username)
+	if ch.Users[ind] != username {
+		l := append(ch.Users[:ind],username)
+		if ind < len(ch.Users) {
+			ch.Users = append(l,ch.Users[ind:]...)
+		}
+	}
+	ic.Channels[chname] = ch
+
+	ic.map_lock <- true
+}
+func (ic *IrcClient) RemUser(chname string,username string) {
+	<-ic.map_lock
+	
+	ch,_ := ic.Channels[chname]
+	ind := sort.StringSlice(ch.Users).Search(username)
+	if ch.Users[ind] == username {
+		if ind < len(ch.Users)-1 {
+			ch.Users = append(ch.Users[:ind],ch.Users[ind+1:]...)
+		} else {
+			ch.Users = ch.Users[:ind]
+		}
+	}
+	ic.Channels[chname] = ch
+
+	ic.map_lock <- true
+}
+func (ic *IrcClient) AddMsg(chname string,msg string) {
+	<-ic.map_lock
+
+	ch,_ := ic.Channels[chname]
+	ch.Msgs = append(ch.Msgs,msg)
+	ch.Frame_offset += 1
+	ic.Channels[chname] = ch
+
+	ic.map_lock <- true
+}
+func (ic *IrcClient) Scroll(dist int) {
+	<-ic.map_lock
+		ch,_ := ic.Channels[ic.current]
+		ch.Frame_offset += dist
+		l := len(ch.Msgs)
+		if ch.Frame_offset > l {ch.Frame_offset = l}
+		if ch.Frame_offset < 0 {ch.Frame_offset = 0}
+		ic.Channels[ic.current] = ch
+	ic.map_lock <- true
+}
+
 func NewClient(conn net.Conn) IrcClient {
 	var ic IrcClient
 	ic.Conn = &conn
 	ic.Channels = make(map[string]Channel)
 	ic.updateView = make(chan bool,1)
 	ic.map_lock = make(chan bool,1)
-	ic.Channels["default"] = append(ic.Channels["default"],"Welcome to IRC")
+
+	ic.map_lock <- true	//Required for AddMsg
+	ic.AddMsg("default","Welcome to IRC")
+
 	ic.current = "default"
-	ic.map_lock <- true
 	return ic
 }
 func (ic *IrcClient) Receive() {
@@ -55,8 +115,23 @@ func (ic *IrcClient) Receive() {
 			op.cmd = "pong"
 			ic.Send(op)
 			break
+		case "353":
+			usernames := strings.Fields(pkt.trail[1:])
+			params := strings.Fields(pkt.params)
+			for _,u := range usernames {
+				ic.AddUser(params[len(params)-1],u)
+			}
+
 		case "join":
+			f := func(r rune) bool {return (r == '!' || r == '@')}
+			nick := strings.FieldsFunc(pkt.prefix,f)
+			params := strings.Fields(pkt.params)
+			ic.AddUser(params[0],nick[0])
 		case "part":
+			f := func(r rune) bool {return (r == '!' || r == '@')}
+			nick := strings.FieldsFunc(pkt.prefix,f)
+			params := strings.Fields(pkt.params)
+			ic.RemUser(params[0],nick[0])
 		case "quit":
 			break
 		case "privmsg":
@@ -67,16 +142,11 @@ func (ic *IrcClient) Receive() {
 				msg = msg+nick
 			}
 			msg = msg+":"+pkt.trail
-			<-ic.map_lock
-			ic.Channels[pkt.params] = append(ic.Channels[pkt.params],msg)
-			ic.map_lock<-true
-			if pkt.params == ic.current { ic.frame_offset += 1 }
+
+			ic.AddMsg(pkt.params,msg)
 			break
 		default:
-			<-ic.map_lock
-			ic.Channels["default"] = append(ic.Channels["default"],pkt.ToString())
-			ic.map_lock<-true
-			if ic.current == "default" { ic.frame_offset += 1}
+			ic.AddMsg("default",pkt.ToString())
 			//fmt.Println(pkt)
 			break
 		}
@@ -110,20 +180,20 @@ func (ic *IrcClient) View(finish chan bool) {
 		<-ic.map_lock
 		ch,ok := ic.Channels[ic.current]
 		ic.map_lock<-true
-		if ok {
+		if ok {	//Should be fine even if you don't check. 
 			termbox.Clear(termbox.ColorWhite,termbox.ColorBlack)
 			linecount := height-2
 
 //Outputs Line Wrapped lines stored in a channel.
 			bh := 1
-			for l := len(ch)-1; linecount > bh && l >= 0; l -= 1 {
-				if l >= ic.frame_offset { continue }	//Skips to offset
+			for l := len(ch.Msgs)-1; linecount > bh && l >= 0; l -= 1 {
+				if l >= ch.Frame_offset { continue }	//Skips to offset
 				var cnt int
-				for _,_ = range ch[l] { cnt += 1 }
+				for _,_ = range ch.Msgs[l] { cnt += 1 }
 				length := cnt
 				bh = length/(width-12)
 				cnt = 0
-				for _,c := range ch[l] {
+				for _,c := range ch.Msgs[l] {
 					off := cnt/(width-12)
 					termbox.SetCell(cnt%(width-12),linecount-bh+off,c,termbox.ColorWhite,termbox.ColorBlack)
 					cnt += 1
@@ -158,7 +228,7 @@ func (ic *IrcClient) View(finish chan bool) {
 				termbox.SetCell(w+width-12,h,r,termbox.ColorWhite,termbox.ColorBlack)
 				w += 1
 			}
-			num := strconv.Itoa(len(v))
+			num := strconv.Itoa(len(v.Msgs))
 			w = 0
 			for _,r := range num {
 				termbox.SetCell(width-len(num)+w,h,r,termbox.ColorWhite,termbox.ColorBlack)
@@ -215,34 +285,36 @@ func (ic *IrcClient) ProcessTermbox() {
 					ic.ProcessInput()
 				case termbox.KeySpace:
 					ic.Input = append(ic.Input,' ')
+				case termbox.KeyTab:	//Poor Tab-completion Doesn't cycle.
+					f := strings.Fields(string(ic.Input))
+					if len(f) == 0 { break }
+					w := f[len(f)-1]
+
+					<-ic.map_lock
+						ch,_ := ic.Channels[ic.current]
+					ic.map_lock <- true
+					ind := sort.StringSlice(ch.Users).Search(w)
+					if ind == len(ch.Users) { break }
+					if strings.Contains(ch.Users[ind],w) {
+						f[len(f)-1] = ch.Users[ind]
+						ic.Input = []rune(strings.Join(f," "))
+					}
 
 				case termbox.KeyInsert:	//KeyArrowUp rune is picked up
-					ic.frame_offset -= 1
-					if ic.frame_offset < 0 { ic.frame_offset = 0 }
+					ic.Scroll(-1)
 				case termbox.KeyDelete: //KeyArrowDown rune is picked up
-					ic.frame_offset += 1
-					<-ic.map_lock
-					l := len(ic.Channels[ic.current])
-					ic.map_lock <- true
-					if ic.frame_offset > l { ic.frame_offset = l }
+					ic.Scroll(1)
 				case termbox.KeyPgup:
 					_,height := termbox.Size()
-					ic.frame_offset -= height
-					if ic.frame_offset < 0 { ic.frame_offset = 0 }
+					ic.Scroll(-height)
 				case termbox.KeyPgdn:
 					_,height := termbox.Size()
-					ic.frame_offset += height
-					<-ic.map_lock
-					l := len(ic.Channels[ic.current])
-					ic.map_lock <- true
-					if ic.frame_offset > l { ic.frame_offset = l }
+					ic.Scroll(height)
 
 				case termbox.KeyHome:
-					ic.frame_offset = 0
+					ic.Scroll(-1000000000)//-1GB, should exceed msg number
 				case termbox.KeyEnd:
-					<-ic.map_lock
-					ic.frame_offset = len(ic.Channels[ic.current])
-					ic.map_lock <- true
+					ic.Scroll(1000000000)//1GB, should exceed msg number
 				case termbox.KeyCtrlQ:
 					return
 				default:
@@ -282,7 +354,12 @@ func (ic *IrcClient) ProcessInput() {
 	case "join":
 		if len(params) == 0 { break }
 		<-ic.map_lock
-		ic.Channels[params[0]] = append(ic.Channels[params[0]],params[0])
+			ch,ok := ic.Channels[params[0]]
+			if !ok {
+				ch.Msgs = append(ch.Msgs,params[0])
+				ch.Frame_offset += 1
+				ic.Channels[params[0]] = ch
+			}
 		ic.map_lock<-true
 		ic.current = params[0]
 		break
@@ -320,13 +397,19 @@ func (ic *IrcClient) ProcessInput() {
 	case "msg":
 		pkt.cmd = "privmsg"
 		<-ic.map_lock
-		ic.Channels[params[0]] = append(ic.Channels[params[0]],line)
+			ch,_ := ic.Channels[params[0]]
+			ch.Msgs = append(ch.Msgs,line)
+			ch.Frame_offset += 1
+			ic.Channels[params[0]] = ch
 		ic.map_lock<-true
 		if params[0] == ic.current { ic.frame_offset += 1 }
 	case "privmsg":
 		pkt.cmd = "privmsg"
 		<-ic.map_lock
-		ic.Channels[params[0]] = append(ic.Channels[params[0]],line)
+			ch,_ := ic.Channels[params[0]]
+			ch.Msgs = append(ch.Msgs,line)
+			ch.Frame_offset += 1
+			ic.Channels[params[0]] = ch
 		ic.map_lock<-true
 		if params[0] == ic.current { ic.frame_offset += 1 }
 		break
@@ -334,7 +417,10 @@ func (ic *IrcClient) ProcessInput() {
 		return
 	case "":
 		<-ic.map_lock
-		ic.Channels[ic.current] = append(ic.Channels[ic.current],line)
+			ch,_ := ic.Channels[ic.current]
+			ch.Msgs = append(ch.Msgs,line)
+			ch.Frame_offset += 1
+			ic.Channels[ic.current] = ch
 		ic.map_lock<-true
 		ic.frame_offset += 1
 		pkt.cmd = "privmsg"
@@ -361,7 +447,7 @@ func (ic *IrcClient) ProcessInput() {
 		}
 		<-ic.map_lock
 		v,_ := ic.Channels[ic.current]
-		ic.frame_offset = len(v)
+		ic.frame_offset = len(v.Msgs)
 		ic.map_lock <- true
 
 		//fmt.Println(ic.current)
@@ -373,7 +459,7 @@ func (ic *IrcClient) ProcessInput() {
 		ic.map_lock <- true
 		if ok {
 			ic.current = params[0]
-			ic.frame_offset = len(v)
+			ic.frame_offset = len(v.Msgs)
 		}
 		return
 	case "l":
@@ -382,7 +468,10 @@ func (ic *IrcClient) ProcessInput() {
 		for k,_ := range ic.Channels {
 			list = append(list,k+"\t\t"+strconv.Itoa(len(k)))
 		}
-		ic.Channels["list"] = list
+		ch,_ := ic.Channels["list"]
+		ch.Msgs = list
+		ch.Frame_offset = len(ch.Msgs)-1
+		ic.Channels["list"] = ch
 		ic.map_lock <- true
 		ic.current = "list"
 		return
@@ -402,7 +491,10 @@ func (ic *IrcClient) ProcessInput() {
 		help = append(help,"Insert         :Scroll Up")
 		help = append(help,"Delete         :Scroll Down")
 		<-ic.map_lock
-		ic.Channels["help"] = help
+		ch,_ := ic.Channels["help"]
+		ch.Msgs = help
+		ch.Frame_offset = len(ch.Msgs)-1
+		ic.Channels["help"] = ch
 		ic.map_lock <- true
 		ic.current = "help"
 		return
@@ -419,7 +511,7 @@ func (ic *IrcClient) ProcessInput() {
 							file.Close()
 							continue
 						}
-						for _,l := range v {
+						for _,l := range v.Msgs {
 							file.Write([]byte(l+"\n"))
 						}
 						file.Close()
@@ -435,7 +527,7 @@ func (ic *IrcClient) ProcessInput() {
 					file.Close()
 					continue
 				}
-				for _,l := range v {
+				for _,l := range v.Msgs {
 					file.Write([]byte(l+"\n"))
 				}
 				file.Close()
