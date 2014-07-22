@@ -4,6 +4,10 @@
 /sync			Resyncs terminal buffer
 /show chname	Focuses window on chname if you're connected
 /msg name :msg	Sends msg to name
+/next or CtrlN	Next Window
+/find keyword	Adds keyword to list and highlights sentences
+/clear			Clears keyword list
+CtrlW			Closes and parts current channel
 Page Up			Page Up
 Page Down		Page Down
 Insert			Scroll Up

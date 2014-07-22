@@ -21,13 +21,13 @@ type Channel struct { //[]string
 
 //Use SortedSlice instead of map for Channels, sort by channel name
 type IrcClient struct {
+	Name		string
 	Conn		*net.Conn
 	Channels	map[string]Channel
 	Input		[]rune
 	current		string
 	updateView	chan bool
 	map_lock	chan bool
-	frame_offset	int			//Should be in the Channel struct.
 	keywords	[]string
 	//Reader		bufio.Reader
 	//Writer		bufio.Writer
@@ -89,6 +89,25 @@ func (ic *IrcClient) Scroll(dist int) {
 		ic.Channels[ic.current] = ch
 	ic.map_lock <- true
 }
+func (ic *IrcClient) NextChan() {
+	var chlist []string
+	<-ic.map_lock
+	for k,_ := range ic.Channels {
+		chlist = append(chlist,k)
+	}
+	ic.map_lock<-true
+	sort.Sort(sort.StringSlice(chlist))
+	for i,ch := range chlist {
+		if ch == ic.current {
+			if i < len(chlist)-1 {
+				ic.current = chlist[i+1]
+			} else {
+				ic.current = chlist[0]
+			}
+			break
+		}
+	}
+}
 
 func NewClient(conn net.Conn) IrcClient {
 	var ic IrcClient
@@ -129,26 +148,39 @@ func (ic *IrcClient) Receive() {
 
 		case "join":
 			f := func(r rune) bool {return (r == '!' || r == '@')}
-			nick := strings.FieldsFunc(pkt.prefix,f)
+			name := strings.FieldsFunc(pkt.prefix,f)[0]
 			params := strings.Fields(pkt.params)
-			ic.AddUser(params[0],nick[0])
+			ic.AddUser(params[0],name)
 		case "part":
 			f := func(r rune) bool {return (r == '!' || r == '@')}
-			nick := strings.FieldsFunc(pkt.prefix,f)
+			name := strings.FieldsFunc(pkt.prefix,f)[0]
 			params := strings.Fields(pkt.params)
-			ic.RemUser(params[0],nick[0])
+			ic.RemUser(params[0],name)
 		case "quit":
 			break
 		case "privmsg":
 			var msg string
+			f := func(r rune) bool {return (r == '!' || r == '@')}
+			name := strings.FieldsFunc(pkt.prefix,f)[0]
+			/*
 			nickind := strings.Index(pkt.prefix,"!")
 			if nickind != -1 {
 				nick := pkt.prefix[1:nickind]
 				msg = msg+nick
 			}
+			*/
+			p := strings.Fields(pkt.params)
+			if len(p) == 0 {
+				ic.AddMsg("default",pkt.ToString())
+				break
+			}
+			msg = msg+name
 			msg = msg+":"+pkt.trail
-
-			ic.AddMsg(pkt.params,msg)
+			if p[len(p)-1] == ic.Name {
+				ic.AddMsg(name,msg)
+			} else {
+				ic.AddMsg(pkt.params,msg)
+			}
 			break
 		default:
 			ic.AddMsg("default",pkt.ToString())
@@ -234,7 +266,7 @@ func (ic *IrcClient) View(finish chan bool) {
 		<-ic.map_lock
 		h := 0
 		for k,v := range ic.Channels{
-			if k[0] != '#' { continue }
+			//if k[0] != '#' { continue }
 			w := 0
 			for _,r := range k {
 				if w >= 8 { continue }
@@ -313,6 +345,19 @@ func (ic *IrcClient) ProcessTermbox() {
 						ic.Input = []rune(strings.Join(f," "))
 					}
 
+
+				case termbox.KeyCtrlN:
+					ic.NextChan()
+				case termbox.KeyCtrlW:	//Not a good idea.
+//Double buffering ic.Input could have out-of sync write/reads that throw it all to shit.
+					backup := ic.Input
+					ic.Input = []rune("/part "+ic.current)
+					ic.ProcessInput()
+					ic.Input = backup
+				case termbox.KeyCtrlQ:
+					return
+
+
 				case termbox.KeyInsert:	//KeyArrowUp rune is picked up
 					ic.Scroll(-1)
 				case termbox.KeyDelete: //KeyArrowDown rune is picked up
@@ -328,8 +373,6 @@ func (ic *IrcClient) ProcessTermbox() {
 					ic.Scroll(-1000000000)//-1GB, should exceed msg number
 				case termbox.KeyEnd:
 					ic.Scroll(1000000000)//1GB, should exceed msg number
-				case termbox.KeyCtrlQ:
-					return
 				default:
 				}
 			}
@@ -383,25 +426,7 @@ func (ic *IrcClient) ProcessInput() {
 		ic.map_lock<-true
 
 		if ok {
-			var chlist []string
-
-			<-ic.map_lock
-			for k,_ := range ic.Channels {
-				chlist = append(chlist,k)
-			}
-			ic.map_lock<-true
-
-			sort.Sort(sort.StringSlice(chlist))
-			for i,ch := range chlist {
-				if ch == ic.current {
-					if i > 0 {
-						ic.current = chlist[i-1]
-					} else {
-						ic.current = chlist[0]
-					}
-					break
-				}
-			}
+			ic.NextChan()
 			<-ic.map_lock
 			delete(ic.Channels,params[0])
 			ic.map_lock<-true
@@ -415,7 +440,6 @@ func (ic *IrcClient) ProcessInput() {
 			ch.Frame_offset += 1
 			ic.Channels[params[0]] = ch
 		ic.map_lock<-true
-		if params[0] == ic.current { ic.frame_offset += 1 }
 	case "privmsg":
 		pkt.cmd = "privmsg"
 		<-ic.map_lock
@@ -424,8 +448,9 @@ func (ic *IrcClient) ProcessInput() {
 			ch.Frame_offset += 1
 			ic.Channels[params[0]] = ch
 		ic.map_lock<-true
-		if params[0] == ic.current { ic.frame_offset += 1 }
 		break
+	case "nick":
+		ic.Name = strings.Fields(pkt.params)[0]
 	case "quit":
 		return
 	case "":
@@ -435,44 +460,22 @@ func (ic *IrcClient) ProcessInput() {
 			ch.Frame_offset += 1
 			ic.Channels[ic.current] = ch
 		ic.map_lock<-true
-		ic.frame_offset += 1
 		pkt.cmd = "privmsg"
 		pkt.params = ic.current
 		pkt.trail = line
 		break
 	case "next":
-		var chlist []string
-		<-ic.map_lock
-		for k,_ := range ic.Channels {
-			chlist = append(chlist,k)
-		}
-		ic.map_lock<-true
-		sort.Sort(sort.StringSlice(chlist))
-		for i,ch := range chlist {
-			if ch == ic.current {
-				if i < len(chlist)-1 {
-					ic.current = chlist[i+1]
-				} else {
-					ic.current = chlist[0]
-				}
-				break
-			}
-		}
-		<-ic.map_lock
-		v,_ := ic.Channels[ic.current]
-		ic.frame_offset = len(v.Msgs)
-		ic.map_lock <- true
+		ic.NextChan()
 
 		//fmt.Println(ic.current)
 		//ic.updateView <- true
 		return
 	case "show":
 		<-ic.map_lock
-		v,ok := ic.Channels[params[0]]
+		_,ok := ic.Channels[params[0]]
 		ic.map_lock <- true
 		if ok {
 			ic.current = params[0]
-			ic.frame_offset = len(v.Msgs)
 		}
 		return
 	case "l":	//Print channel list
@@ -518,6 +521,10 @@ func (ic *IrcClient) ProcessInput() {
 		help = append(help,"/sync          :Resync's terimnal buffer")
 		help = append(help,"/show chname   :Focuses window on chname if you're connected")
 		help = append(help,"/msg name :msg :Sends msg to name")
+		help = append(help,"/next or CtrlN :Next window.")
+		help = append(help,"/find keyword  :Adds keyword to list and highlights sentences.")
+		help = append(help,"/clear         :Clears keyword list")
+		help = append(help,"CtrlW          :Closes and parts current channel.")
 		help = append(help,"Page Up        :Page Up")
 		help = append(help,"Page Down      :Page Down")
 		help = append(help,"Insert         :Scroll Up")
