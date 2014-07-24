@@ -17,6 +17,7 @@ type Channel struct { //[]string
 	Msgs			[]string
 	Users			[]string
 	Frame_offset	int
+	important	bool
 }
 
 //Use SortedSlice instead of map for Channels, sort by channel name
@@ -75,6 +76,13 @@ func (ic *IrcClient) AddMsg(chname string,msg string) {
 	ch,_ := ic.Channels[chname]
 	ch.Msgs = append(ch.Msgs,msg)
 	ch.Frame_offset += 1
+
+	for _,w := range ic.keywords {
+		if strings.Contains(msg,w) {
+			ch.important = true
+		}
+	}
+
 	ic.Channels[chname] = ch
 
 	ic.map_lock <- true
@@ -104,6 +112,13 @@ func (ic *IrcClient) NextChan() {
 			} else {
 				ic.current = chlist[0]
 			}
+			<-ic.map_lock
+			v,ok := ic.Channels[ic.current]
+			if ok {
+				v.important = false
+				ic.Channels[ic.current] = v
+			}
+			ic.map_lock <- true
 			break
 		}
 	}
@@ -212,6 +227,7 @@ func (ic *IrcClient) View(finish chan bool) {
 	//prev := make(map[string]int)
 	width,height := termbox.Size()
 	termbox.SetCursor(0,height)
+	fps := time.NewTicker(40*time.Millisecond)
 	for <-ic.updateView {
 		//fb := termbox.CellBuffer()
 		<-ic.map_lock
@@ -266,23 +282,27 @@ func (ic *IrcClient) View(finish chan bool) {
 		<-ic.map_lock
 		h := 0
 		for k,v := range ic.Channels{
+			if k == "default" { continue }
 			//if k[0] != '#' { continue }
 			w := 0
+			fg := termbox.ColorWhite
+			if v.important { fg = termbox.ColorRed }
 			for _,r := range k {
 				if w >= 8 { continue }
-				termbox.SetCell(w+width-12,h,r,termbox.ColorWhite,termbox.ColorBlack)
+				termbox.SetCell(w+width-12,h,r,fg,termbox.ColorBlack)
 				w += 1
 			}
 			num := strconv.Itoa(len(v.Msgs))
 			w = 0
 			for _,r := range num {
-				termbox.SetCell(width-len(num)+w,h,r,termbox.ColorWhite,termbox.ColorBlack)
+				termbox.SetCell(width-len(num)+w,h,r,fg,termbox.ColorBlack)
 				w += 1
 			}
 			h += 1
 		}
 		ic.map_lock <- true
 		termbox.Flush()
+		<-fps.C
 	}
 	//termbox.Close()
 	//finish <- true
@@ -414,8 +434,9 @@ func (ic *IrcClient) ProcessInput() {
 			if !ok {
 				ch.Msgs = append(ch.Msgs,params[0])
 				ch.Frame_offset += 1
-				ic.Channels[params[0]] = ch
 			}
+			ch.important = false
+			ic.Channels[params[0]] = ch
 		ic.map_lock<-true
 		ic.current = params[0]
 		break
@@ -472,11 +493,13 @@ func (ic *IrcClient) ProcessInput() {
 		return
 	case "show":
 		<-ic.map_lock
-		_,ok := ic.Channels[params[0]]
-		ic.map_lock <- true
+		ch,ok := ic.Channels[params[0]]
 		if ok {
 			ic.current = params[0]
+			ch.important = false
+			ic.Channels[params[0]] = ch
 		}
+		ic.map_lock <- true
 		return
 	case "l":	//Print channel list
 		list := []string{"List of Channels."}
