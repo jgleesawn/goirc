@@ -3,7 +3,7 @@ import (
 	"strings"
 	"strconv"
 	"bufio"
-	"fmt"
+	//"fmt"
 	"io"
 	"net"
 	"sort"
@@ -26,10 +26,13 @@ type IrcClient struct {
 	Conn		*net.Conn
 	Channels	map[string]Channel
 	Input		[]rune
-	current		string
+
 	updateView	chan bool
+
+	current		string
 	map_lock	chan bool
 	keywords	[]string
+	running		bool
 	//Reader		bufio.Reader
 	//Writer		bufio.Writer
 }
@@ -154,23 +157,24 @@ func NewClient(conn net.Conn) IrcClient {
 	var ic IrcClient
 	ic.Conn = &conn
 	ic.Channels = make(map[string]Channel)
-	ic.updateView = make(chan bool,1)
 	ic.map_lock = make(chan bool,1)
+	ic.updateView = make(chan bool,1)
 
 	ic.map_lock <- true	//Required for AddMsg
 	ic.AddMsg("default","Welcome to IRC")
 
 	ic.current = "default"
+	ic.running = true
 	return ic
 }
 func (ic *IrcClient) Receive() {
 	reader := bufio.NewReader(*ic.Conn)
-	for {
+	for ic.running {
 		packet,err := reader.ReadString('\n')
 		if err != nil {
-			ic.updateView <- false
-			time.Sleep(2*time.Second)
-			fmt.Println(err)
+			ic.running = false
+			//ic.updateView <- false
+			//fmt.Println(err)
 			return
 		}
 		pkt := NewIrcPacket(packet[:len(packet)-1])
@@ -228,7 +232,6 @@ func (ic *IrcClient) Receive() {
 			//fmt.Println(pkt)
 			break
 		}
-		ic.updateView <- true
 	}
 }
 func (ic *IrcClient) View(finish chan bool) {
@@ -239,6 +242,7 @@ func (ic *IrcClient) View(finish chan bool) {
 	defer func() {
 		recover()
 		termbox.Close()
+		ic.running = false
 		finish <- true	//Used for blocking in main.
 	} ()
 
@@ -253,8 +257,12 @@ func (ic *IrcClient) View(finish chan bool) {
 	//prev := make(map[string]int)
 	width,height := termbox.Size()
 	termbox.SetCursor(0,height)
-	fps := time.NewTicker(40*time.Millisecond)
-	for <-ic.updateView {
+	fps := time.NewTicker(time.Second)
+	for ic.running {
+		select {
+		case <-ic.updateView:
+		case <-fps.C:
+		}
 		//fb := termbox.CellBuffer()
 		<-ic.map_lock
 		ch,ok := ic.Channels[ic.current]
@@ -328,7 +336,6 @@ func (ic *IrcClient) View(finish chan bool) {
 		}
 		ic.map_lock <- true
 		termbox.Flush()
-		<-fps.C
 	}
 	//termbox.Close()
 	//finish <- true
@@ -349,7 +356,7 @@ func (ic *IrcClient) View(finish chan bool) {
 */
 func (ic *IrcClient) ProcessReader(inp io.Reader) {
 	reader := bufio.NewReader(inp)
-	for {
+	for ic.running {
 		line,err := reader.ReadString('\n')
 		if err != nil { continue }
 
@@ -360,11 +367,10 @@ func (ic *IrcClient) ProcessReader(inp io.Reader) {
 }
 func (ic *IrcClient) ProcessTermbox() {
 	defer func() { 
-		ic.updateView <- false 
+		ic.running = false
 	} ()
 
-	for termbox.IsInit {
-		e := termbox.PollEvent()
+	for e := termbox.PollEvent(); termbox.IsInit; e = termbox.PollEvent() {
 		if e.Type == termbox.EventKey {
 			if int(e.Ch) != 0 {
 				ic.Input = append(ic.Input,e.Ch)
@@ -425,7 +431,7 @@ func (ic *IrcClient) ProcessTermbox() {
 				}
 			}
 		}
-		ic.updateView <- true
+		ic.updateView<-true
 	}
 }
 
@@ -620,10 +626,7 @@ func (ic *IrcClient) ProcessInput() {
 
 func (ic *IrcClient) Send(pkt ircpacket) {
 	//fmt.Println(pkt.ToString())
-	_,err := (*ic.Conn).Write([]byte(pkt.ToString()))
-	if err != nil {
-		ic.updateView <- false
-	}
+	(*ic.Conn).Write([]byte(pkt.ToString()))
 }
 
 
