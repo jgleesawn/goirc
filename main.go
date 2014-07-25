@@ -53,6 +53,7 @@ func main() {
 	go Client.ProcessTermbox()
 
 	<-isFinished
+	Client.LogAll()
 	conn.Close()
 
 }

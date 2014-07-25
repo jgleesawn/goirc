@@ -123,6 +123,32 @@ func (ic *IrcClient) NextChan() {
 		}
 	}
 }
+func (ic *IrcClient) LogAll() {
+	var tnames []string
+	<-ic.map_lock
+	for k,_ := range ic.Channels { tnames = append(tnames,k) }
+	ic.map_lock <- true
+	for _,n := range tnames { ic.Log(n) }
+}
+func (ic *IrcClient) Log(fn string) {
+	<-ic.map_lock
+	v,ok := ic.Channels[fn]
+	ic.map_lock <- true
+	if ok {
+		if fn != "list" || fn != "help" {
+		//if fn[0] == '#' {
+			file,err := os.Create(fn+"_log_"+time.Now().String())
+			if err != nil {
+				file.Close()
+				return
+			}
+			for _,l := range v.Msgs {
+				file.Write([]byte(l+"\n"))
+			}
+			file.Close()
+		}
+	}
+}
 
 func NewClient(conn net.Conn) IrcClient {
 	var ic IrcClient
@@ -213,7 +239,7 @@ func (ic *IrcClient) View(finish chan bool) {
 	defer func() {
 		recover()
 		termbox.Close()
-		finish <- true
+		finish <- true	//Used for blocking in main.
 	} ()
 
 	/*
@@ -333,7 +359,9 @@ func (ic *IrcClient) ProcessReader(inp io.Reader) {
 	}
 }
 func (ic *IrcClient) ProcessTermbox() {
-	defer func() { ic.updateView <- false } ()
+	defer func() { 
+		ic.updateView <- false 
+	} ()
 
 	for termbox.IsInit {
 		e := termbox.PollEvent()
@@ -563,38 +591,14 @@ func (ic *IrcClient) ProcessInput() {
 	case "log":
 		if len(params) > 0 {
 			for _,c := range params {
-				<-ic.map_lock
-				v,ok := ic.Channels[c]
-				ic.map_lock <- true
-				if ok {
-					if c[0] == '#' {
-						file,err := os.Create(c+"_log_"+time.Now().String())
-						if err != nil {
-							file.Close()
-							continue
-						}
-						for _,l := range v.Msgs {
-							file.Write([]byte(l+"\n"))
-						}
-						file.Close()
-					}
-				}
+				ic.Log(c)
 			}
 		} else {
+			var tnames []string
 			<-ic.map_lock
-			for k,v := range ic.Channels {
-				if k[0] != '#' { continue }
-				file,err := os.Create(k+"_log_"+time.Now().String())
-				if err != nil {
-					file.Close()
-					continue
-				}
-				for _,l := range v.Msgs {
-					file.Write([]byte(l+"\n"))
-				}
-				file.Close()
-			}
+			for k,_ := range ic.Channels { tnames = append(tnames,k) }
 			ic.map_lock <- true
+			for _,n := range tnames { ic.Log(n) }
 		}
 		return
 	case "find":
@@ -616,7 +620,10 @@ func (ic *IrcClient) ProcessInput() {
 
 func (ic *IrcClient) Send(pkt ircpacket) {
 	//fmt.Println(pkt.ToString())
-	(*ic.Conn).Write([]byte(pkt.ToString()))
+	_,err := (*ic.Conn).Write([]byte(pkt.ToString()))
+	if err != nil {
+		ic.updateView <- false
+	}
 }
 
 
