@@ -17,7 +17,7 @@ type Channel struct { //[]string
 	Msgs			[]string
 	Users			[]string
 	Frame_offset	int
-	important	bool
+	important		bool
 }
 
 //Use SortedSlice instead of map for Channels, sort by channel name
@@ -140,7 +140,7 @@ func (ic *IrcClient) Log(fn string) {
 	if ok {
 		if fn != "list" || fn != "help" {
 		//if fn[0] == '#' {
-			file,err := os.Create(fn+"_log_"+time.Now().String())
+			file,err := os.Create("logs/"+fn+"_log_"+time.Now().String())
 			if err != nil {
 				file.Close()
 				return
@@ -169,7 +169,9 @@ func NewClient(conn net.Conn) IrcClient {
 }
 func (ic *IrcClient) Receive() {
 	reader := bufio.NewReader(*ic.Conn)
+	t := time.NewTicker(time.Millisecond)
 	for ic.running {
+		<-t.C
 		packet,err := reader.ReadString('\n')
 		if err != nil {
 			ic.running = false
@@ -177,61 +179,63 @@ func (ic *IrcClient) Receive() {
 			//fmt.Println(err)
 			return
 		}
-		pkt := NewIrcPacket(packet[:len(packet)-1])
-		switch pkt.cmd {
-		case "ping":
-			var op ircpacket
-			op.cmd = "pong"
-			ic.Send(op)
-			break
-		case "353":
-			usernames := strings.Fields(pkt.trail[1:])
-			params := strings.Fields(pkt.params)
-			for _,u := range usernames {
-				ic.AddUser(params[len(params)-1],u)
-			}
-
-		case "join":
-			f := func(r rune) bool {return (r == '!' || r == '@')}
-			name := strings.FieldsFunc(pkt.prefix,f)[0]
-			params := strings.Fields(pkt.params)
-			ic.AddUser(params[0],name)
-		case "part":
-			f := func(r rune) bool {return (r == '!' || r == '@')}
-			name := strings.FieldsFunc(pkt.prefix,f)[0]
-			params := strings.Fields(pkt.params)
-			ic.RemUser(params[0],name)
-		case "quit":
-			break
-		case "privmsg":
-			var msg string
-			f := func(r rune) bool {return (r == '!' || r == '@')}
-			name := strings.FieldsFunc(pkt.prefix,f)[0]
-			/*
-			nickind := strings.Index(pkt.prefix,"!")
-			if nickind != -1 {
-				nick := pkt.prefix[1:nickind]
-				msg = msg+nick
-			}
-			*/
-			p := strings.Fields(pkt.params)
-			if len(p) == 0 {
+		go func() {
+			pkt := NewIrcPacket(packet[:len(packet)-1])
+			switch pkt.cmd {
+			case "ping":
+				var op ircpacket
+				op.cmd = "pong"
+				ic.Send(op)
+				break
+			case "353":
+				usernames := strings.Fields(pkt.trail[1:])
+				params := strings.Fields(pkt.params)
+				for _,u := range usernames {
+					ic.AddUser(params[len(params)-1],u)
+				}
+	
+			case "join":
+				f := func(r rune) bool {return (r == '!' || r == '@')}
+				name := strings.FieldsFunc(pkt.prefix,f)[0]
+				params := strings.Fields(pkt.params)
+				ic.AddUser(params[0],name)
+			case "part":
+				f := func(r rune) bool {return (r == '!' || r == '@')}
+				name := strings.FieldsFunc(pkt.prefix,f)[0]
+				params := strings.Fields(pkt.params)
+				ic.RemUser(params[0],name)
+			case "quit":
+				break
+			case "privmsg":
+				var msg string
+				f := func(r rune) bool {return (r == '!' || r == '@')}
+				name := strings.FieldsFunc(pkt.prefix,f)[0]
+				/*
+				nickind := strings.Index(pkt.prefix,"!")
+				if nickind != -1 {
+					nick := pkt.prefix[1:nickind]
+					msg = msg+nick
+				}
+				*/
+				p := strings.Fields(pkt.params)
+				if len(p) == 0 {
+					ic.AddMsg("default",pkt.ToString())
+					break
+				}
+				msg = msg+name
+				msg = msg+":"+pkt.trail
+				if p[len(p)-1] == ic.Name {
+					ic.AddMsg(name,msg)
+				} else {
+					ic.AddMsg(pkt.params,msg)
+				}
+				break
+			default:
 				ic.AddMsg("default",pkt.ToString())
+				//fmt.Println(pkt)
 				break
 			}
-			msg = msg+name
-			msg = msg+":"+pkt.trail
-			if p[len(p)-1] == ic.Name {
-				ic.AddMsg(name,msg)
-			} else {
-				ic.AddMsg(pkt.params,msg)
-			}
-			break
-		default:
-			ic.AddMsg("default",pkt.ToString())
-			//fmt.Println(pkt)
-			break
-		}
+		}()
 	}
 }
 func (ic *IrcClient) View(finish chan bool) {
@@ -258,10 +262,12 @@ func (ic *IrcClient) View(finish chan bool) {
 	width,height := termbox.Size()
 	termbox.SetCursor(0,height)
 	fps := time.NewTicker(time.Second)
+	var ok bool
 	for ic.running {
 		select {
-		case <-ic.updateView:
-		case <-fps.C:
+		case _,ok = <-ic.updateView:
+			if !ok { return }
+		case _,ok = <-fps.C:
 		}
 		//fb := termbox.CellBuffer()
 		<-ic.map_lock
@@ -367,10 +373,13 @@ func (ic *IrcClient) ProcessReader(inp io.Reader) {
 }
 func (ic *IrcClient) ProcessTermbox() {
 	defer func() { 
+		recover()
 		ic.running = false
+		termbox.Close()
 	} ()
 
-	for e := termbox.PollEvent(); termbox.IsInit; e = termbox.PollEvent() {
+	t := time.NewTicker(250*time.Millisecond)
+	for e := termbox.PollEvent(); termbox.IsInit && ic.running; e = termbox.PollEvent() {
 		if e.Type == termbox.EventKey {
 			if int(e.Ch) != 0 {
 				ic.Input = append(ic.Input,e.Ch)
@@ -431,7 +440,11 @@ func (ic *IrcClient) ProcessTermbox() {
 				}
 			}
 		}
-		ic.updateView<-true
+		select {
+		case <-t.C:
+			ic.updateView<-true
+		default:
+		}
 	}
 }
 
@@ -626,7 +639,10 @@ func (ic *IrcClient) ProcessInput() {
 
 func (ic *IrcClient) Send(pkt ircpacket) {
 	//fmt.Println(pkt.ToString())
-	(*ic.Conn).Write([]byte(pkt.ToString()))
+	_,err := (*ic.Conn).Write([]byte(pkt.ToString()))
+	if err != nil {
+		ic.running = false
+	}
 }
 
 
