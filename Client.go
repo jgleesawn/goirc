@@ -169,9 +169,8 @@ func NewClient(conn net.Conn) IrcClient {
 }
 func (ic *IrcClient) Receive() {
 	reader := bufio.NewReader(*ic.Conn)
-	t := time.NewTicker(time.Millisecond)
+	ready := make(chan bool,1)
 	for ic.running {
-		<-t.C
 		packet,err := reader.ReadString('\n')
 		if err != nil {
 			ic.running = false
@@ -181,6 +180,7 @@ func (ic *IrcClient) Receive() {
 		}
 		go func() {
 			pkt := NewIrcPacket(packet[:len(packet)-1])
+			ready <- true
 			switch pkt.cmd {
 			case "ping":
 				var op ircpacket
@@ -236,6 +236,7 @@ func (ic *IrcClient) Receive() {
 				break
 			}
 		}()
+		<-ready
 	}
 }
 func (ic *IrcClient) View(finish chan bool) {
@@ -378,14 +379,14 @@ func (ic *IrcClient) ProcessTermbox() {
 		termbox.Close()
 	} ()
 
-	t := time.NewTicker(250*time.Millisecond)
+	t := time.NewTicker(100*time.Millisecond)
 	for e := termbox.PollEvent(); termbox.IsInit && ic.running; e = termbox.PollEvent() {
 		if e.Type == termbox.EventKey {
 			if int(e.Ch) != 0 {
 				ic.Input = append(ic.Input,e.Ch)
 			} else {
 				switch e.Key {
-				case termbox.KeyBackspace:
+				case termbox.KeyBackspace, termbox.KeyBackspace2:
 					if len(ic.Input) > 0 {
 						ic.Input = ic.Input[:len(ic.Input)-1]
 					}
